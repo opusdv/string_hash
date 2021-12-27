@@ -1,0 +1,97 @@
+version: '3'
+services:
+  mongo:
+    image: mongo
+    ports:
+      - 27017:27017
+  elasticsearch:
+    image: elasticsearch:7.13.2
+    environment:
+      - xpack.security.enabled=false
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true # along with the memlock settings below, disables swapping
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # minimum and maximum Java heap size, recommend setting both to 50% of system RAM
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 262144 # maximum number of open files for the Elasticsearch user, set to at least 65536 on modern systems
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+  graylog:
+    image: graylog/graylog:4.2
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+    entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    depends_on:
+      - mongo
+      - elasticsearch
+    ports:
+      - 9000:9000
+      - 1514:1514
+      - 1514:1514/udp
+      - 12201:12201
+      - 12201:12201/udp
+    logging:
+      driver: "json-file"
+      options: 
+        max-size: "10m"
+        max-file: "5"
+  consul:
+    image: consul
+    ports:
+      - '8500:8500'
+      - '8600:8600'
+      - '8600:8600/udp'
+    logging:
+      driver: "gelf" 
+      options:
+        gelf-address: udp://localhost:12201
+        tag: "consul"
+    depends_on:
+     - graylog
+  service1:
+    build: ./service1
+    ports:
+      - 8090:8090
+    environment:
+      - LOG_LEVEL=debug
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    depends_on:
+      - graylog
+      - consul
+    logging:
+      driver: "gelf" 
+      options:
+        gelf-address: udp://localhost:12201
+        tag: "consul"
+  service2:
+    build: ./service2
+    ports:
+      - 8080:8080
+    environment:
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=string_hash
+      - RPC_SERVVER=service1
+      - RPC_PORT=8090
+      - LOG_LEVEL=debug
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    depends_on:
+      - service1
+      - consul
+      - graylog
+    logging:
+      driver: "gelf" 
+      options:
+        gelf-address: udp://localhost:12201
+        tag: "consul"
+    
